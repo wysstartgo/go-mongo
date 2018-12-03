@@ -1,0 +1,7 @@
+{
+  "SourceMongoUrl": "mongodb://zx:zx123456@192.168.1.133:20001,192.168.1.134:20001,192.168.1.135:20001/zx",
+  "TargetMongoUrl": "mongodb://rtMongDb11:r12345678t@192.168.1.41:27017/zx",
+
+  "SourceCollection": "business_collect_record",
+  "TargetCollection": "business_collect_record"
+}
