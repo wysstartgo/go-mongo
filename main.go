@@ -44,8 +44,8 @@ func main(){
 		goto ERROR;
 	}
 
-
-	handle()
+	//conf.GConf.
+	handleCollectionCopy()
 
 	//var ss string
 	//fmt.Println(ss)
@@ -104,14 +104,17 @@ func writeTargetData(data []interface{}){
 }
 
 
-func handle() {
+func handleCollectionCopy() {
 	//sourceUrl := "mongodb://zx:zx123456@192.168.1.133:20001,192.168.1.134:20001,192.168.1.135:20001/zx"
 	//sourceCollectionUrl := "business_collect_record"
 	//targetUrl := "mongodb://rtMongDb11:r12345678t@192.168.1.41:27017/zx"
 	//targetCollectionName := "business_collect_record"
 	_, sourceCollection = initDB(conf.GConf.SourceMongoUrl, conf.GConf.SourceCollection)
 	_, targetCollection = initDB(conf.GConf.TargetMongoUrl,conf.GConf.TargetCollection)
-
+	colls,_ := sourceCollection.Indexes()
+	for _,index := range colls{
+		targetCollection.EnsureIndex(index)
+	}
 	var controlWaitGroup sync.WaitGroup
 
 	for i := 1 ; i <= WorkerCount; i++{
@@ -281,6 +284,6 @@ func initDB(url string, c string) (*mgo.Session, *mgo.Collection){
 	}
 
 	collection := server.DB(dialInfo.Database).C(c)
-
+	//collection.Indexes()
 	return server, collection
 }

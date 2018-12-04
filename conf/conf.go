@@ -10,6 +10,7 @@ type Conf struct {
 	TargetMongoUrl string  `json:"targetMongoUrl"`
 	SourceCollection string `json:"sourceCollection"`
 	TargetCollection string `json:"targetCollection"`
+	IsCopyDataBase  string `json:"isCopyDataBase"`
 }
 
 var GConf *Conf
