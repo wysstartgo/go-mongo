@@ -17,8 +17,8 @@ const BatchSize  = 500
 
 var (
 	configFile string
-	sourceCollection *mgo.Collection
-	targetCollection *mgo.Collection
+	//sourceCollection *mgo.Collection
+	//targetCollection *mgo.Collection
 )
 //var sourceCollection *mgo.Collection
 
@@ -44,8 +44,26 @@ func main(){
 		goto ERROR;
 	}
 
-	//conf.GConf.
-	handleCollectionCopy()
+	switch conf.GConf.IsCopyDataBase{
+	case "0":
+		//只拷贝collection，不拷贝整个库
+		_, sourceCollection := initDB(conf.GConf.SourceMongoUrl, conf.GConf.SourceCollection)
+		_, targetCollection := initDB(conf.GConf.TargetMongoUrl,conf.GConf.TargetCollection)
+		handleCollectionCopy(sourceCollection,targetCollection)
+		break
+	case "1":
+		//拷贝整个库
+		_,sourceDb := getDB(conf.GConf.SourceMongoUrl)
+		collNames,_ := sourceDb.CollectionNames()
+		for _,colName := range collNames{
+			sourceCollection := sourceDb.C(colName)
+			_,targetCollection := initDB(conf.GConf.TargetMongoUrl,colName)
+			handleCollectionCopy(sourceCollection,targetCollection)
+		}
+	default:
+		fmt.Println("error input!")
+		break
+	}
 
 	//var ss string
 	//fmt.Println(ss)
@@ -72,7 +90,7 @@ func initEnv() {
 /**
   注意：在这里需要传指针，不能传变量
  */
-func work(ch chan []interface{},workWaitGroup *sync.WaitGroup){
+func work(ch chan []interface{},workWaitGroup *sync.WaitGroup,targetCollection *mgo.Collection){
 	var isStop = false
 	for{
 		if isStop{
@@ -81,7 +99,7 @@ func work(ch chan []interface{},workWaitGroup *sync.WaitGroup){
 		//接收任务
 		select {
 		case task := <- ch:
-			writeTargetData(task)
+			writeTargetData(task,targetCollection)
 		case <-time.After(time.Second * 5):
 			fmt.Println("数据已经处理完毕，关闭协程!")
 			workWaitGroup.Done()
@@ -92,7 +110,7 @@ func work(ch chan []interface{},workWaitGroup *sync.WaitGroup){
 	}
 }
 
-func writeTargetData(data []interface{}){
+func writeTargetData(data []interface{},targetCollection *mgo.Collection){
 	fmt.Println("received +:",len(data))
 	bulk := targetCollection.Bulk()
 	bulk.Insert(data...)
@@ -104,13 +122,11 @@ func writeTargetData(data []interface{}){
 }
 
 
-func handleCollectionCopy() {
+func handleCollectionCopy(sourceCollection *mgo.Collection,targetCollection *mgo.Collection) {
 	//sourceUrl := "mongodb://zx:zx123456@192.168.1.133:20001,192.168.1.134:20001,192.168.1.135:20001/zx"
 	//sourceCollectionUrl := "business_collect_record"
 	//targetUrl := "mongodb://rtMongDb11:r12345678t@192.168.1.41:27017/zx"
 	//targetCollectionName := "business_collect_record"
-	_, sourceCollection = initDB(conf.GConf.SourceMongoUrl, conf.GConf.SourceCollection)
-	_, targetCollection = initDB(conf.GConf.TargetMongoUrl,conf.GConf.TargetCollection)
 	colls,_ := sourceCollection.Indexes()
 	for _,index := range colls{
 		targetCollection.EnsureIndex(index)
@@ -120,7 +136,7 @@ func handleCollectionCopy() {
 	for i := 1 ; i <= WorkerCount; i++{
 		controlWaitGroup.Add(1)
 		//初始化几个worker
-		go work(ch,&controlWaitGroup)
+		go work(ch,&controlWaitGroup,targetCollection)
 	}
 
 	//fmt.Println(sourceCollection,"***********************")
@@ -148,29 +164,29 @@ func handleCollectionCopy() {
 	waitGroup.Add(1)
 	log.Println("start from first position!")
 	//time.Sleep(time.Second * 2)
-	go StartFromFirstPosition(half, &waitGroup)
+	go StartFromFirstPosition(half, &waitGroup,sourceCollection)
 	log.Println("start from end position!")
 	waitGroup.Add(1)
 	if count % 2 == 0 {
-		go StartFromEndPosition(half, &waitGroup)
+		go StartFromEndPosition(half, &waitGroup,sourceCollection)
 	} else {
 		//从后向前多查询一个
-		go StartFromEndPosition(half+1, &waitGroup)
+		go StartFromEndPosition(half+1, &waitGroup,sourceCollection)
 	}
 	waitGroup.Wait()
 	fmt.Println("**************************")
 	controlWaitGroup.Wait()
 }
 
-func StartFromFirstPosition(count int,waitGroup * sync.WaitGroup){
+func StartFromFirstPosition(count int,waitGroup * sync.WaitGroup,sourceCollection *mgo.Collection){
 	fmt.Println("FromFirstPosition===============count:",count)
 	var lastObjId bson.ObjectId
-	runFromStartPosition(count,lastObjId)
+	runFromStartPosition(count,lastObjId,sourceCollection)
 	waitGroup.Done()
 
 }
 
-func runFromStartPosition(count int,lastObjId bson.ObjectId)  {
+func runFromStartPosition(count int,lastObjId bson.ObjectId,sourceCollection *mgo.Collection)  {
 	var sourceResult []interface{}
 	fmt.Println("FromFirstPosition===============count is:",count)
 	fmt.Println("FromFirstPosition=============lastObjId:",lastObjId)
@@ -207,18 +223,18 @@ func runFromStartPosition(count int,lastObjId bson.ObjectId)  {
 	lastObjId = firstResult.(bson.M)["_id"].(bson.ObjectId)
 	ch <- sourceResult
 	if count - BatchSize > 0 {
-		runFromStartPosition(count - BatchSize,lastObjId)
+		runFromStartPosition(count - BatchSize,lastObjId,sourceCollection)
 	}
 }
 
-func StartFromEndPosition(count int,waitGroup * sync.WaitGroup){
+func StartFromEndPosition(count int,waitGroup * sync.WaitGroup,sourceCollection *mgo.Collection){
 	//fmt.Println("FromEndPosition===============count:",count)
 	var firstObjId bson.ObjectId
-	runFromEndPosition(count,firstObjId)
+	runFromEndPosition(count,firstObjId,sourceCollection)
 	waitGroup.Done()
 }
 
-func runFromEndPosition(count int,firstObjId bson.ObjectId){
+func runFromEndPosition(count int,firstObjId bson.ObjectId,sourceCollection *mgo.Collection){
 	//从结束的地方开始查找,是在另一个协程中处理的
 	var sourceResult []interface{}
 	fmt.Println("FromEndPosition===============count is:",count)
@@ -252,7 +268,7 @@ func runFromEndPosition(count int,firstObjId bson.ObjectId){
 		firstResult := sourceResult[len - 1]
 		//fmt.Println("=====FromEnd:",firstResult)
 		firstObjId = firstResult.(bson.M)["_id"].(bson.ObjectId)
-		runFromEndPosition(count - BatchSize,firstObjId)
+		runFromEndPosition(count - BatchSize,firstObjId,sourceCollection)
 	}
 
 }
@@ -286,4 +302,20 @@ func initDB(url string, c string) (*mgo.Session, *mgo.Collection){
 	collection := server.DB(dialInfo.Database).C(c)
 	//collection.Indexes()
 	return server, collection
+}
+
+func getDB(url string) (*mgo.Session, *mgo.Database) {
+	dialInfo,err := mgo.ParseURL(url)
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
+	server, err := mgo.Dial(url)
+	if err != nil {
+		panic(err)
+	}
+
+	db := server.DB(dialInfo.Database)
+	//collection.Indexes()
+	return server, db
 }
