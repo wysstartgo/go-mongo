@@ -13,7 +13,7 @@ import (
 	"github.com/wysstartgo/go-mongo/conf"
 )
 //@see https://www.jianshu.com/p/b63e5cfa4ce5
-const BatchSize  = 500
+const BatchSize  = 200
 
 var (
 	configFile string
@@ -40,6 +40,7 @@ func main(){
 	initEnv()
 
 	var err error = nil
+
 	if err = conf.LoadConf(configFile); err != nil {
 		goto ERROR;
 	}
@@ -48,18 +49,27 @@ func main(){
 	case "0":
 		//只拷贝collection，不拷贝整个库
 		_, sourceCollection := initDB(conf.GConf.SourceMongoUrl, conf.GConf.SourceCollection)
-		_, targetCollection := initDB(conf.GConf.TargetMongoUrl,conf.GConf.TargetCollection)
-		handleCollectionCopy(sourceCollection,targetCollection)
+		_,targetDb := getDB(conf.GConf.TargetMongoUrl)
+		//_, targetCollection := initDB(conf.GConf.TargetMongoUrl, conf.GConf.TargetCollection)
+		var collsSyncGroup sync.WaitGroup
+		doWork(sourceCollection,conf.GConf.TargetCollection,targetDb,&collsSyncGroup)
+		collsSyncGroup.Wait()
 		break
 	case "1":
 		//拷贝整个库
-		_,sourceDb := getDB(conf.GConf.SourceMongoUrl)
-		collNames,_ := sourceDb.CollectionNames()
-		for _,colName := range collNames{
+		_, sourceDb := getDB(conf.GConf.SourceMongoUrl)
+		collNames, _ := sourceDb.CollectionNames()
+		fmt.Println("collNames:", collNames)
+		_, targetDb := getDB(conf.GConf.TargetMongoUrl)
+		var collsSyncGroup sync.WaitGroup
+		for _, colName := range collNames {
+			fmt.Println("同步的collection name is :",colName)
 			sourceCollection := sourceDb.C(colName)
-			_,targetCollection := initDB(conf.GConf.TargetMongoUrl,colName)
-			handleCollectionCopy(sourceCollection,targetCollection)
+			//targetCollection := targetDb.C(colName)
+			collsSyncGroup.Add(1)
+			doWork(sourceCollection,colName,targetDb,&collsSyncGroup)
 		}
+		collsSyncGroup.Wait()
 	default:
 		fmt.Println("error input!")
 		break
@@ -78,6 +88,20 @@ ERROR:
 
 }
 
+func doWork(sourceCollection *mgo.Collection,targetCollectionName string,targetDatabase *mgo.Database,collsSyncGroup *sync.WaitGroup) {
+	var controlWaitGroup sync.WaitGroup
+	for i := 1; i <= WorkerCount; i++ {
+		controlWaitGroup.Add(1)
+		//初始化几个worker
+		go work(ch,&controlWaitGroup, targetCollectionName,targetDatabase)
+	}
+	targetCollection := targetDatabase.C(targetCollectionName)
+	handleCollectionCopy(sourceCollection,targetCollection)
+	fmt.Println("**************************任务完成!")
+	controlWaitGroup.Wait()
+	collsSyncGroup.Done()
+}
+
 func initCmd() {
 	flag.StringVar(&configFile, "config", "./conf.json", "where conf.json is.")
 	flag.Parse()
@@ -90,7 +114,7 @@ func initEnv() {
 /**
   注意：在这里需要传指针，不能传变量
  */
-func work(ch chan []interface{},workWaitGroup *sync.WaitGroup,targetCollection *mgo.Collection){
+func work(ch chan []interface{},workWaitGroup *sync.WaitGroup,targetColName string,targetDataBaset *mgo.Database){
 	var isStop = false
 	for{
 		if isStop{
@@ -99,7 +123,8 @@ func work(ch chan []interface{},workWaitGroup *sync.WaitGroup,targetCollection *
 		//接收任务
 		select {
 		case task := <- ch:
-			writeTargetData(task,targetCollection)
+			fmt.Println("*************************col name is :" + targetColName)
+			writeTargetData(task,targetColName,targetDataBaset)
 		case <-time.After(time.Second * 5):
 			fmt.Println("数据已经处理完毕，关闭协程!")
 			workWaitGroup.Done()
@@ -110,8 +135,9 @@ func work(ch chan []interface{},workWaitGroup *sync.WaitGroup,targetCollection *
 	}
 }
 
-func writeTargetData(data []interface{},targetCollection *mgo.Collection){
+func writeTargetData(data []interface{},targetColName string,targetDataBaset *mgo.Database){
 	fmt.Println("received +:",len(data))
+	targetCollection := targetDataBaset.C(targetColName)
 	bulk := targetCollection.Bulk()
 	bulk.Insert(data...)
 	_,err := bulk.Run()
@@ -131,14 +157,6 @@ func handleCollectionCopy(sourceCollection *mgo.Collection,targetCollection *mgo
 	for _,index := range colls{
 		targetCollection.EnsureIndex(index)
 	}
-	var controlWaitGroup sync.WaitGroup
-
-	for i := 1 ; i <= WorkerCount; i++{
-		controlWaitGroup.Add(1)
-		//初始化几个worker
-		go work(ch,&controlWaitGroup,targetCollection)
-	}
-
 	//fmt.Println(sourceCollection,"***********************")
 	pipe := sourceCollection.Pipe([]bson.M{{"$count": "count"}})
 	resp := []bson.M{}
@@ -147,8 +165,6 @@ func handleCollectionCopy(sourceCollection *mgo.Collection,targetCollection *mgo
 		fmt.Println("pipe control error!")
 	}
 	count := resp[0]["count"].(int)
-
-
 	//count, error := sourceCollection.Count()
 	//if error != nil {
 	//	panic(error)
@@ -174,8 +190,6 @@ func handleCollectionCopy(sourceCollection *mgo.Collection,targetCollection *mgo
 		go StartFromEndPosition(half+1, &waitGroup,sourceCollection)
 	}
 	waitGroup.Wait()
-	fmt.Println("**************************")
-	controlWaitGroup.Wait()
 }
 
 func StartFromFirstPosition(count int,waitGroup * sync.WaitGroup,sourceCollection *mgo.Collection){

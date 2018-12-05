@@ -12,3 +12,5 @@
 
 # 项目运行方式
 > 运行方式：go-zm-dev.exe -config .\conf.json
+
+> 参数说明: IsCopyDataBase 1表示是,0表示否
